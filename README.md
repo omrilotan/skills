@@ -89,7 +89,7 @@ For GitHub tree lookups, `skills` first tries the API anonymously, then an expli
 | `-s, --skill <skills...>` | Install specific skills by name (use `'*'` for all skills)                                                                                         |
 | `-l, --list`              | List available skills without installing                                                                                                           |
 | `--copy`                  | Copy files instead of symlinking to agent directories                                                                                              |
-| `--dir <path>`            | Copy skills directly into a custom skills directory (e.g. `~/.claude/skills`), skipping agent and scope selection                                  |
+| `--dir <path>`            | Copy skills into a custom directory instead of agent directories. See [Custom Directories](#custom-directories)                                    |
 | `-y, --yes`               | Skip all confirmation prompts                                                                                                                      |
 | `--all`                   | Install all skills to all agents without prompts                                                                                                   |
 
@@ -123,8 +123,8 @@ npx skills add vercel-labs/agent-skills --agent '*' --skill frontend-design
 # Install from a direct SKILL.md or archive download URL
 npx skills add https://example.com/download/my-skill
 
-# Install into a custom skills directory (e.g. a second Claude Code config dir)
-npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/personal/.claude-config/skills
+# Install into a custom skills directory (e.g. a second Claude Code profile)
+npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/work/.claude/skills
 ```
 
 Direct download URLs are tried after well-known discovery. They may point to a single valid `SKILL.md` file or a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive; the URL does not need to include a file extension. Downloads are limited to 10 MiB, extracted content to 25 MiB, and archives to 1000 files by default. Override with `SKILLS_DOWNLOAD_MAX_BYTES`, `SKILLS_EXTRACT_MAX_BYTES`, and `SKILLS_EXTRACT_MAX_FILES` when you trust the source.
@@ -135,6 +135,22 @@ Direct download URLs are tried after well-known discovery. They may point to a s
 | ----------- | --------- | ------------------- | --------------------------------------------- |
 | **Project** | (default) | `./<agent>/skills/` | Committed with your project, shared with team |
 | **Global**  | `-g`      | `~/<agent>/skills/` | Available across all projects                 |
+| **Custom**  | `--dir`   | `<path>/<skill>/`   | Any folder you choose (see below)             |
+
+### Custom Directories
+
+Use `--dir` to install into a folder that is not one of the built-in agent locations. Typical cases are a second agent profile (for example two Claude Code configs), a dotfiles-managed folder, or a self-hosted agent.
+
+```bash
+npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/work/.claude/skills
+npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/personal/.claude/skills
+```
+
+- Skills are copied to `<path>/<skill-name>/`. Agent selection, the scope prompt and symlinks are skipped.
+- `~` is expanded and relative paths resolve against the current directory.
+- The directory is recorded in the global lock file (`~/.agents/.skill-lock.json`), separately per directory, so the same skill can live in several directories without clashing with your agent installs.
+- `skills update` refreshes custom directories together with global skills, and `update`, `list` and `remove` accept `--dir <path>` to work on one directory.
+- `--dir` cannot be combined with `--agent`, `--subagent` or `--global`.
 
 ### Installation Methods
 
@@ -169,6 +185,9 @@ npx skills ls -g
 
 # Filter by specific agents
 npx skills ls -a claude-code -a cursor
+
+# List skills in a custom directory (installed with add --dir)
+npx skills ls --dir ~/work/.claude/skills
 ```
 
 ### `skills find`
@@ -204,6 +223,9 @@ npx skills update -p
 
 # Non-interactive (auto-detects scope: project if in a project, else global)
 npx skills update -y
+
+# Update only a custom directory (installed with add --dir)
+npx skills update --dir ~/work/.claude/skills
 ```
 
 | Option          | Description                                                               |
@@ -211,6 +233,7 @@ npx skills update -y
 | `-g, --global`  | Only update global skills                                                 |
 | `-p, --project` | Only update project skills                                                |
 | `-y, --yes`     | Skip scope prompt (auto-detect: project if in a project dir, else global) |
+| `--dir <path>`  | Only update skills installed into this custom directory                   |
 | `[skills...]`   | Update specific skills by name instead of all                             |
 
 ### `skills init`
@@ -252,6 +275,9 @@ npx skills remove --skill '*' -a cursor
 # Remove a specific skill from all agents
 npx skills remove my-skill --agent '*'
 
+# Remove from a custom directory (installed with add --dir)
+npx skills remove my-skill --dir ~/work/.claude/skills
+
 # Use 'rm' alias
 npx skills rm my-skill
 ```
@@ -263,6 +289,7 @@ npx skills rm my-skill
 | `-s, --skill`  | Specify skills to remove (use `'*'` for all)     |
 | `-y, --yes`    | Skip confirmation prompts                        |
 | `--all`        | Shorthand for `--skill '*' --agent '*' -y`       |
+| `--dir <path>` | Remove from a custom directory                   |
 
 ## What are Agent Skills?
 

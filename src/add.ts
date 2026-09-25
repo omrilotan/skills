@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
-import { sep, join, dirname, resolve } from 'path';
+import { sep, join, dirname } from 'path';
 import { parseSource, getOwnerRepo, parseOwnerRepo, isRepoPrivate } from './source-parser.ts';
 import { stripTerminalEscapes } from './sanitize.ts';
 import { searchMultiselect } from './prompts/search-multiselect.ts';
@@ -13,6 +13,7 @@ import {
   installBlobSkillForAgent,
   isSkillInstalled,
   sanitizeName,
+  resolveInstallDir,
   getCanonicalPath,
   installWellKnownSkillForAgent,
   type InstallMode,
@@ -43,6 +44,7 @@ import {
 import { downloadSource } from './download-source.ts';
 import {
   addSkillToLock,
+  addSkillToDirLock,
   getGitHubToken,
   isPromptDismissed,
   dismissPrompt,
@@ -586,16 +588,6 @@ export interface AddOptions {
   dir?: string;
 }
 
-/** Expand a leading `~` and resolve a user-supplied install directory. */
-export function resolveInstallDir(dir: string): string {
-  const trimmed = dir.trim();
-  if (trimmed === '~') return homedir();
-  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
-    return join(homedir(), trimmed.slice(2));
-  }
-  return resolve(trimmed);
-}
-
 /** One entry per skill in `add --json` output. */
 interface AddJsonResult {
   name?: string;
@@ -632,6 +624,14 @@ function buildJsonSecurity(
     ...(data.snyk && { snyk: data.snyk.risk }),
     ...(source && { details: `https://skills.sh/${source}` }),
   };
+}
+
+/**
+ * Lock writer for an install: `--dir` installs are tracked per directory,
+ * everything else in the global skills map.
+ */
+function getLockWriter(dir: string | undefined): typeof addSkillToLock {
+  return dir ? (name, entry) => addSkillToDirLock(dir, name, entry) : addSkillToLock;
 }
 
 /**
@@ -1020,12 +1020,13 @@ async function handleWellKnownSkills(
     });
   }
 
-  // Add to skill lock file for update tracking (only for global installs)
-  if (successful.length > 0 && installGlobally) {
+  // Add to skill lock file for update tracking (global and --dir installs)
+  if (successful.length > 0 && (installGlobally || options.dir)) {
+    const writeLock = getLockWriter(options.dir);
     for (const skill of selectedSkills) {
       if (successfulSkillNames.has(skill.installName)) {
         try {
-          await addSkillToLock(skill.installName, {
+          await writeLock(skill.installName, {
             source: sourceIdentifier,
             sourceType: 'well-known',
             sourceUrl: skill.sourceUrl,
@@ -2126,14 +2127,15 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       }
     }
 
-    // Add to skill lock file for update tracking (only for global installs)
+    // Add to skill lock file for update tracking (global and --dir installs)
     // Notion installs are downloaded to a temp dir that parses as `local` and is deleted in the
     // finally block below, so only a real local path is recorded (same guard as the project lock).
     if (
       successful.length > 0 &&
-      installGlobally &&
+      (installGlobally || options.dir) &&
       (normalizedSource || (parsed.type === 'local' && !directDownload))
     ) {
+      const writeLock = getLockWriter(options.dir);
       // For GitHub clone installs, fetch the repo tree once and reuse it
       // for all skills — avoids N sequential API calls that take ~400ms each.
       let cachedTree: Awaited<ReturnType<typeof fetchRepoTree>> | undefined;
@@ -2165,7 +2167,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
               if (hash) skillFolderHash = hash;
             }
 
-            await addSkillToLock(skill.name, {
+            await writeLock(skill.name, {
               source: lockSource || normalizedSource || parsed.url,
               sourceType: parsed.type,
               sourceUrl: parsed.url,

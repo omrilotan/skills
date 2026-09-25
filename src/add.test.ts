@@ -10,8 +10,8 @@ import {
   getLockSource,
   getProjectLockSourceUrl,
   formatEveInstallPromptMessage,
-  resolveInstallDir,
 } from './add.ts';
+import { resolveInstallDir } from './installer.ts';
 
 function countPathLinesForSkill(text: string, skillName: string): number {
   return (
@@ -224,6 +224,57 @@ Instructions here.
 
       expect(result.exitCode).toBe(0);
       expect(existsSync(join(projectDir, 'my-skills', 'rel-skill', 'SKILL.md'))).toBe(true);
+    });
+
+    it('lists and removes skills in a custom directory using the lock file', () => {
+      const sourceDir = join(testDir, 'source');
+      writeSkill(sourceDir, 'tracked-skill');
+      writeSkill(sourceDir, 'other-skill');
+      const customDir = join(testDir, 'custom', 'skills');
+      const stateDir = join(testDir, 'state');
+      const env = { ...noDetectedAgentEnv, XDG_STATE_HOME: stateDir };
+
+      expect(runCli(['add', sourceDir, '-y', '--dir', customDir], testDir, env).exitCode).toBe(0);
+
+      // Seed a lock entry as a remote install would record it.
+      mkdirSync(join(stateDir, 'skills'), { recursive: true });
+      writeFileSync(
+        join(stateDir, 'skills', '.skill-lock.json'),
+        JSON.stringify({
+          version: 3,
+          skills: {},
+          customDirs: {
+            [customDir]: {
+              'tracked-skill': {
+                source: 'owner/repo',
+                sourceType: 'github',
+                sourceUrl: 'https://github.com/owner/repo.git',
+                skillFolderHash: 'h',
+                installedAt: '',
+                updatedAt: '',
+              },
+            },
+          },
+        })
+      );
+
+      const list = runCli(['ls', '--dir', customDir], testDir, env);
+      expect(list.exitCode).toBe(0);
+      expect(list.stdout).toMatch(/tracked-skill\s+Source: owner\/repo/);
+      expect(list.stdout).toMatch(/other-skill\s+Source: local/);
+
+      const globalList = runCli(['ls', '-g'], testDir, env);
+      expect(globalList.stdout).toContain('Custom Directories');
+      expect(globalList.stdout).toContain('1 skill(s)');
+
+      const removed = runCli(['rm', 'tracked-skill', '--dir', customDir, '-y'], testDir, env);
+      expect(removed.exitCode).toBe(0);
+      expect(existsSync(join(customDir, 'tracked-skill'))).toBe(false);
+      expect(existsSync(join(customDir, 'other-skill'))).toBe(true);
+      const lock = JSON.parse(
+        readFileSync(join(stateDir, 'skills', '.skill-lock.json'), 'utf-8')
+      ) as { customDirs?: unknown };
+      expect(lock.customDirs).toBeUndefined();
     });
 
     it('rejects combining --dir with --agent', () => {

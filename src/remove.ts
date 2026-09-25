@@ -5,7 +5,13 @@ import { join } from 'path';
 import { agents, detectInstalledAgents, getEveSubagents } from './agents.ts';
 import { track } from './telemetry.ts';
 import { detectAgent } from './detect-agent.ts';
-import { removeSkillFromLock, getSkillFromLock, readSkillLock } from './skill-lock.ts';
+import {
+  removeSkillFromLock,
+  getSkillFromLock,
+  readSkillLock,
+  getDirLockedSkills,
+  removeSkillFromDirLock,
+} from './skill-lock.ts';
 import { readLocalLock, removeSkillFromLocalLock } from './local-lock.ts';
 import { hasSkillMd } from './skills.ts';
 import type { AgentType } from './types.ts';
@@ -15,6 +21,7 @@ import {
   getCanonicalSkillsDir,
   getEveSubagentSkillsDir,
   sanitizeName,
+  resolveInstallDir,
 } from './installer.ts';
 
 export interface RemoveOptions {
@@ -22,6 +29,8 @@ export interface RemoveOptions {
   agent?: string[];
   yes?: boolean;
   all?: boolean;
+  /** Remove from a custom install directory (`add --dir`) instead of agent directories. */
+  dir?: string;
 }
 
 /**
@@ -88,6 +97,15 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
     );
     p.log.info(`Example: skills remove ${namedSkills[0]} -y`);
     process.exit(1);
+  }
+
+  if (options.dir) {
+    if (options.global || (options.agent && options.agent.length > 0)) {
+      p.log.error('The --dir flag cannot be combined with --agent or --global.');
+      process.exit(1);
+    }
+    await removeFromDir(skillNames, { ...options, dir: resolveInstallDir(options.dir) });
+    return;
   }
 
   const isGlobal = options.global ?? false;
@@ -394,6 +412,114 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
 }
 
 /**
+ * Remove skills from a custom install directory (`add --dir`). Only that
+ * directory and its lock entries are touched; agent directories are left alone.
+ */
+async function removeFromDir(
+  skillNames: string[],
+  options: RemoveOptions & { dir: string }
+): Promise<void> {
+  const { dir } = options;
+  const installedSkills: string[] = [];
+  try {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (await hasSkillMd(join(dir, entry.name))) installedSkills.push(entry.name);
+    }
+  } catch (err) {
+    if (err instanceof Error && (err as { code?: string }).code !== 'ENOENT') {
+      p.log.warn(`Could not scan directory ${dir}: ${err.message}`);
+    }
+  }
+  installedSkills.sort();
+
+  const lockSkills = await getDirLockedSkills(dir);
+  const lockKeys = Object.keys(lockSkills);
+  const requested = options.all ? [...installedSkills, ...lockKeys] : skillNames;
+  let selectedSkills = resolveSkillsToRemove(requested, installedSkills, lockKeys);
+
+  if (installedSkills.length === 0 && selectedSkills.length === 0) {
+    p.outro(pc.yellow(`No skills found to remove in ${dir}.`));
+    return;
+  }
+
+  if (!options.all && skillNames.length > 0 && selectedSkills.length === 0) {
+    p.log.error(`No matching skills found for: ${skillNames.join(', ')}`);
+    return;
+  }
+
+  if (!options.all && skillNames.length === 0) {
+    const selected = await p.multiselect({
+      message: `Select skills to remove from ${dir} ${pc.dim('(space to toggle)')}`,
+      options: installedSkills.map((s) => ({ value: s, label: s })),
+      required: true,
+    });
+    if (p.isCancel(selected)) {
+      p.cancel('Removal cancelled');
+      process.exit(0);
+    }
+    selectedSkills = resolveSkillsToRemove(selected as string[], installedSkills, lockKeys);
+  }
+
+  if (!options.yes) {
+    console.log();
+    p.log.info(`Skills to remove from ${dir}:`);
+    for (const skill of selectedSkills) {
+      p.log.message(`  ${pc.red('•')} ${skill}`);
+    }
+    console.log();
+    const confirmed = await p.confirm({
+      message: `Are you sure you want to uninstall ${selectedSkills.length} skill(s)?`,
+    });
+    if (p.isCancel(confirmed) || !confirmed) {
+      p.cancel('Removal cancelled');
+      process.exit(0);
+    }
+  }
+
+  const failed: Array<{ skill: string; error: string }> = [];
+  const bySource = new Map<string, { skills: string[]; sourceType?: string }>();
+
+  for (const skillName of selectedSkills) {
+    try {
+      await rm(join(dir, sanitizeName(skillName)), { recursive: true, force: true });
+      const lockEntry = lockSkills[skillName];
+      await removeSkillFromDirLock(dir, skillName);
+      const source = lockEntry?.source || 'local';
+      const group = bySource.get(source) || { skills: [], sourceType: lockEntry?.sourceType };
+      group.skills.push(skillName);
+      bySource.set(source, group);
+    } catch (err) {
+      failed.push({ skill: skillName, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  for (const [source, data] of bySource) {
+    track({
+      event: 'remove',
+      source,
+      skills: data.skills.join(','),
+      agents: '',
+      sourceType: data.sourceType || 'local',
+    });
+  }
+
+  const removedCount = selectedSkills.length - failed.length;
+  if (removedCount > 0) {
+    p.log.success(pc.green(`Successfully removed ${removedCount} skill(s)`));
+  }
+  if (failed.length > 0) {
+    p.log.error(pc.red(`Failed to remove ${failed.length} skill(s)`));
+    for (const r of failed) {
+      p.log.message(`  ${pc.red('✗')} ${r.skill}: ${r.error}`);
+    }
+  }
+
+  console.log();
+  p.outro(pc.green('Done!'));
+}
+
+/**
  * Parse command line options for the remove command.
  * Separates skill names from options flags.
  *
@@ -415,6 +541,13 @@ export function parseRemoveOptions(args: string[]): { skills: string[]; options:
     } else if (arg === '--all') {
       options.all = true;
       options.yes = true;
+    } else if (arg === '--dir' || arg?.startsWith('--dir=')) {
+      const value = arg === '--dir' ? args[++i] : arg.slice('--dir='.length);
+      if (value && !value.startsWith('-')) {
+        options.dir = value;
+      } else if (value) {
+        i--;
+      }
     } else if (arg === '-s' || arg === '--skill') {
       i++;
       let nextArg = args[i];

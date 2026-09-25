@@ -128,6 +128,7 @@ ${BOLD}Update Options:${RESET}
   -g, --global           Update global skills only
   -p, --project          Update project skills only
   -y, --yes              Skip scope prompt (auto-detect: project if in a project, else global)
+  --dir <path>           Update only skills installed into this custom directory
 
 ${BOLD}Project:${RESET}
   experimental_install Restore skills from skills-lock.json
@@ -141,7 +142,7 @@ ${BOLD}Add Options:${RESET}
   -l, --list             List available skills in the repository without installing
   -y, --yes              Skip confirmation prompts
   --copy                 Copy files instead of symlinking to agent directories
-  --dir <path>           Install skills directly into a custom skills directory
+  --dir <path>           Copy skills into a custom directory (tracked for update/remove/list)
   --metadata <json>      Attach valid JSON to the install telemetry event
   --subagent <names>     Install to Eve subagents (use 'root' for the root agent)
   --all                  Shorthand for --skill '*' --agent '*' -y
@@ -159,6 +160,7 @@ ${BOLD}Remove Options:${RESET}
   -s, --skill <skills>   Specify skills to remove (use '*' for all skills)
   -y, --yes              Skip confirmation prompts
   --all                  Remove every installed skill (-y implied). Do not combine with named skills.
+  --dir <path>           Remove from a custom directory instead of agent directories
   
 ${BOLD}Experimental Sync Options:${RESET}
   -a, --agent <agents>   Specify agents to install to (use '*' for all agents)
@@ -168,6 +170,7 @@ ${BOLD}List Options:${RESET}
   -g, --global           List global skills (default: project)
   -a, --agent <agents>   Filter by specific agents
   --json                 Output as JSON (machine-readable, no ANSI codes)
+  --dir <path>           List skills in a custom directory
 
 ${BOLD}Options:${RESET}
   --help, -h        Show this help message
@@ -181,6 +184,7 @@ ${BOLD}Examples:${RESET}
   ${DIM}$${RESET} skills add vercel-labs/agent-skills --agent claude-code cursor
   ${DIM}$${RESET} skills add vercel-labs/agent-skills --skill pr-review commit
   ${DIM}$${RESET} skills add vercel-labs/agent-skills --json -y ${DIM}# JSON output${RESET}
+  ${DIM}$${RESET} skills add vercel-labs/agent-skills --dir ~/work/.claude/skills
   ${DIM}$${RESET} skills remove                        ${DIM}# interactive remove${RESET}
   ${DIM}$${RESET} skills remove web-design             ${DIM}# remove by name${RESET}
   ${DIM}$${RESET} skills rm --global frontend-design
@@ -220,6 +224,7 @@ ${BOLD}Options:${RESET}
   -s, --skill        Specify skills to remove (use '*' for all skills)
   -y, --yes          Skip confirmation prompts
   --all              Remove every installed skill (-y implied). Do not combine with named skills.
+  --dir <path>       Remove from a custom directory (installed with add --dir)
 
 ${BOLD}Examples:${RESET}
   ${DIM}$${RESET} skills remove                           ${DIM}# interactive selection${RESET}
@@ -229,6 +234,7 @@ ${BOLD}Examples:${RESET}
   ${DIM}$${RESET} skills rm --agent claude-code my-skill   ${DIM}# remove from specific agent${RESET}
   ${DIM}$${RESET} skills remove --all                      ${DIM}# remove all skills${RESET}
   ${DIM}$${RESET} skills remove --skill '*' -a cursor      ${DIM}# remove all skills from cursor${RESET}
+  ${DIM}$${RESET} skills rm my-skill --dir ~/work/.claude/skills ${DIM}# remove from a custom dir${RESET}
 
 Discover more skills at ${TEXT}https://skills.sh/${RESET}
 `);

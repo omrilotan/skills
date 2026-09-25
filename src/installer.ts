@@ -130,6 +130,20 @@ async function isDirEntryOrSymlinkToDir(
   }
 }
 
+/**
+ * Normalize a user-supplied install directory (`--dir`): expand a leading `~`
+ * and resolve relative paths against cwd. The result is the stable key used to
+ * track the directory in the lock file.
+ */
+export function resolveInstallDir(dir: string): string {
+  const trimmed = dir.trim();
+  if (trimmed === '~') return homedir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return join(homedir(), trimmed.slice(2));
+  }
+  return resolve(trimmed);
+}
+
 export function getCanonicalSkillsDir(global: boolean, cwd?: string): string {
   const baseDir = global ? homedir() : cwd || process.cwd();
   return join(baseDir, AGENTS_DIR, SKILLS_SUBDIR);
