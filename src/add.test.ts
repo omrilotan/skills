@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { existsSync, rmSync, mkdirSync, writeFileSync, lstatSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { runCli, stripAnsi } from './test-utils.ts';
 import { shouldInstallInternalSkills } from './skills.ts';
 import {
@@ -10,6 +10,7 @@ import {
   getLockSource,
   getProjectLockSourceUrl,
   formatEveInstallPromptMessage,
+  resolveInstallDir,
 } from './add.ts';
 
 function countPathLinesForSkill(text: string, skillName: string): number {
@@ -173,6 +174,71 @@ Instructions here.
     expect(lock.skills['my-skill']).toBeDefined();
     expect(lock.skills['my-skill'].sourceType).toBe('local');
     expect(lock.skills['my-skill'].source).toBe(testDir);
+  });
+
+  describe('--dir', () => {
+    function writeSkill(sourceDir: string, name: string): void {
+      const skillDir = join(sourceDir, 'skills', name);
+      mkdirSync(join(skillDir, 'scripts'), { recursive: true });
+      writeFileSync(
+        join(skillDir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${name} description\n---\n\n# ${name}\n`
+      );
+      writeFileSync(join(skillDir, 'scripts', 'run.sh'), 'echo hi\n');
+    }
+
+    it('copies skills into the custom directory without touching agent dirs or locks', () => {
+      const sourceDir = join(testDir, 'source');
+      writeSkill(sourceDir, 'dir-skill');
+      const projectDir = join(testDir, 'project');
+      mkdirSync(projectDir, { recursive: true });
+      const customDir = join(testDir, 'custom', 'skills');
+
+      const result = runCli(
+        ['add', sourceDir, '-y', '--dir', customDir],
+        projectDir,
+        noDetectedAgentEnv
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(stripAnsi(result.stdout)).toContain('Done!');
+      const installed = join(customDir, 'dir-skill');
+      expect(existsSync(join(installed, 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(installed, 'scripts', 'run.sh'))).toBe(true);
+      expect(lstatSync(installed).isSymbolicLink()).toBe(false);
+      expect(existsSync(join(projectDir, '.agents'))).toBe(false);
+      expect(existsSync(join(projectDir, 'skills-lock.json'))).toBe(false);
+    });
+
+    it('supports --dir=<path> and relative paths', () => {
+      const sourceDir = join(testDir, 'source');
+      writeSkill(sourceDir, 'rel-skill');
+      const projectDir = join(testDir, 'project');
+      mkdirSync(projectDir, { recursive: true });
+
+      const result = runCli(
+        ['add', sourceDir, '-y', '--dir=my-skills'],
+        projectDir,
+        noDetectedAgentEnv
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(join(projectDir, 'my-skills', 'rel-skill', 'SKILL.md'))).toBe(true);
+    });
+
+    it('rejects combining --dir with --agent', () => {
+      const sourceDir = join(testDir, 'source');
+      writeSkill(sourceDir, 'conflict-skill');
+
+      const result = runCli(
+        ['add', sourceDir, '-y', '--dir', join(testDir, 'x'), '-a', 'claude-code'],
+        testDir,
+        noDetectedAgentEnv
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(existsSync(join(testDir, 'x'))).toBe(false);
+    });
   });
 
   it('creates the project symlink for an explicitly selected non-universal agent', () => {
@@ -1031,7 +1097,36 @@ describe('shouldInstallInternalSkills', () => {
   });
 });
 
+describe('resolveInstallDir', () => {
+  it('expands a leading ~ to the home directory', () => {
+    expect(resolveInstallDir('~/.claude/skills')).toBe(join(homedir(), '.claude/skills'));
+    expect(resolveInstallDir('~')).toBe(homedir());
+  });
+
+  it('resolves relative paths against cwd', () => {
+    expect(resolveInstallDir('skills')).toBe(join(process.cwd(), 'skills'));
+  });
+});
+
 describe('parseAddOptions', () => {
+  it('should parse --dir with a path', () => {
+    const result = parseAddOptions(['source', '--dir', '~/.claude/skills']);
+    expect(result.source).toEqual(['source']);
+    expect(result.options.dir).toBe('~/.claude/skills');
+    expect(result.errors).toEqual([]);
+  });
+
+  it('should parse --dir=<path>', () => {
+    const result = parseAddOptions(['source', '--dir=/tmp/skills']);
+    expect(result.options.dir).toBe('/tmp/skills');
+  });
+
+  it('should report an error when --dir has no value', () => {
+    const result = parseAddOptions(['source', '--dir', '-y']);
+    expect(result.errors).toContain('--dir requires a directory path');
+    expect(result.options.yes).toBe(true);
+  });
+
   it('should parse --all flag', () => {
     const result = parseAddOptions(['source', '--all']);
     expect(result.source).toEqual(['source']);

@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
-import { sep, join, dirname } from 'path';
+import { sep, join, dirname, resolve } from 'path';
 import { parseSource, getOwnerRepo, parseOwnerRepo, isRepoPrivate } from './source-parser.ts';
 import { stripTerminalEscapes } from './sanitize.ts';
 import { searchMultiselect } from './prompts/search-multiselect.ts';
@@ -12,6 +12,7 @@ import {
   installSkillForAgent,
   installBlobSkillForAgent,
   isSkillInstalled,
+  sanitizeName,
   getCanonicalPath,
   installWellKnownSkillForAgent,
   type InstallMode,
@@ -578,6 +579,21 @@ export interface AddOptions {
   subagent?: string[];
   /** Output results as a JSON array (machine-readable, no ANSI codes). */
   json?: boolean;
+  /**
+   * Install skills directly into this directory (e.g. `~/.claude/skills`)
+   * instead of agent directories. Implies copy mode and skips agent/scope prompts.
+   */
+  dir?: string;
+}
+
+/** Expand a leading `~` and resolve a user-supplied install directory. */
+export function resolveInstallDir(dir: string): string {
+  const trimmed = dir.trim();
+  if (trimmed === '~') return homedir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return join(homedir(), trimmed.slice(2));
+  }
+  return resolve(trimmed);
 }
 
 /** One entry per skill in `add --json` output. */
@@ -894,7 +910,10 @@ async function handleWellKnownSkills(
       targetAgents.map(async (agent) => ({
         skillName: skill.installName,
         agent,
-        installed: await isSkillInstalled(skill.installName, agent, { global: installGlobally }),
+        installed: await isSkillInstalled(skill.installName, agent, {
+          global: installGlobally,
+          targetDir: options.dir,
+        }),
       }))
     )
   );
@@ -909,10 +928,12 @@ async function handleWellKnownSkills(
   for (const skill of selectedSkills) {
     if (summaryLines.length > 0) summaryLines.push('');
 
-    const canonicalPath = getCanonicalPath(skill.installName, { global: installGlobally });
+    const canonicalPath = options.dir
+      ? join(options.dir, sanitizeName(skill.installName))
+      : getCanonicalPath(skill.installName, { global: installGlobally });
     const shortCanonical = shortenPath(canonicalPath, cwd);
     summaryLines.push(`${pc.cyan(shortCanonical)}`);
-    summaryLines.push(...buildAgentSummaryLines(targetAgents, installMode));
+    if (!options.dir) summaryLines.push(...buildAgentSummaryLines(targetAgents, installMode));
     if (skill.files.size > 1) {
       summaryLines.push(`  ${pc.dim('files:')} ${skill.files.size}`);
     }
@@ -960,10 +981,11 @@ async function handleWellKnownSkills(
       const result = await installWellKnownSkillForAgent(skill, agent, {
         global: installGlobally,
         mode: installMode,
+        targetDir: options.dir,
       });
       results.push({
         skill: skill.installName,
-        agent: agents[agent].displayName,
+        agent: options.dir ? shortenPath(options.dir, cwd) : agents[agent].displayName,
         ...result,
       });
     }
@@ -1018,8 +1040,8 @@ async function handleWellKnownSkills(
     }
   }
 
-  // Add to local lock file for project-scoped installs
-  if (successful.length > 0 && !installGlobally) {
+  // Add to local lock file for project-scoped installs (not for --dir installs)
+  if (successful.length > 0 && !installGlobally && !options.dir) {
     for (const skill of selectedSkills) {
       if (successfulSkillNames.has(skill.installName)) {
         try {
@@ -1204,6 +1226,8 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
     options.agent?.includes('*') ? [] : ((options.agent as AgentType[] | undefined) ?? [])
   );
 
+  const agentFlagGiven = (options.agent?.length ?? 0) > 0;
+
   // --all implies --skill '*' and --agent '*' and -y
   if (options.all) {
     options.skill = ['*'];
@@ -1222,6 +1246,19 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
         options.agent = ensureUniversalAgents([mappedAgent]);
       }
     }
+  }
+
+  // --dir installs straight into a custom directory: no agent or scope selection.
+  // Route through the universal agent as a neutral carrier; the installer
+  // writes to options.dir instead of any agent directory.
+  if (options.dir) {
+    if (agentFlagGiven || (options.subagent?.length ?? 0) > 0 || options.global) {
+      emitJsonAndExit(1, 'The --dir flag cannot be combined with --agent, --subagent or --global.');
+    }
+    options.dir = resolveInstallDir(options.dir);
+    options.agent = ['universal'];
+    options.global = false;
+    options.copy = true;
   }
 
   // --json is machine-oriented: never prompt. Require an explicit
@@ -1824,6 +1861,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
           installed: await isSkillInstalled(skill.name, target.agent, {
             global: installGlobally,
             eveSubagent: target.subagent,
+            targetDir: options.dir,
           }),
         }))
       )
@@ -1856,8 +1894,9 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       for (const skill of skills) {
         if (summaryLines.length > 0) summaryLines.push('');
 
-        const canonicalPath =
-          installTargets.length === 1
+        const canonicalPath = options.dir
+          ? join(options.dir, sanitizeName(skill.name))
+          : installTargets.length === 1
             ? getCanonicalPath(skill.name, {
                 global: installGlobally,
                 agent: installTargets[0]!.agent,
@@ -1866,7 +1905,9 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
             : getCanonicalPath(skill.name, { global: installGlobally });
         const shortCanonical = shortenPath(canonicalPath, cwd);
         summaryLines.push(`${pc.cyan(shortCanonical)}`);
-        summaryLines.push(...buildTargetSummaryLines(installTargets, installMode));
+        if (!options.dir) {
+          summaryLines.push(...buildTargetSummaryLines(installTargets, installMode));
+        }
 
         const skillOverwrites = overwriteStatus.get(skill.name);
         const overwriteAgents = installTargets
@@ -1967,6 +2008,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
               mode: installMode,
               eveSubagent: subagent,
               createMissingAgentRoot: explicitlySelectedAgents.has(agent),
+              targetDir: options.dir,
             }
           );
         } else {
@@ -1980,11 +2022,12 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
             mode: installMode,
             eveSubagent: subagent,
             createMissingAgentRoot: explicitlySelectedAgents.has(agent),
+            targetDir: options.dir,
           });
         }
         results.push({
           skill: getSkillDisplayName(skill),
-          agent: targetDisplayName(target),
+          agent: options.dir ? shortenPath(options.dir, cwd) : targetDisplayName(target),
           pluginName: skill.pluginName,
           ...result,
         });
@@ -2139,7 +2182,7 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
     }
 
     // Add to local lock file for project-scoped installs
-    if (successful.length > 0 && !installGlobally && !directDownload) {
+    if (successful.length > 0 && !installGlobally && !directDownload && !options.dir) {
       // Record Eve subagent placement (root = '') so `update` can restore it.
       // Only meaningful when Eve is among the targets and a non-root subagent
       // was selected; otherwise omit for a clean, minimal lock entry.
@@ -2371,6 +2414,7 @@ async function promptForFindSkills(
   // Skip if already dismissed or not in interactive mode
   if (!process.stdin.isTTY) return;
   if (options?.yes) return;
+  if (options?.dir) return;
 
   try {
     const dismissed = await isPromptDismissed('findSkillsPrompt');
@@ -2495,6 +2539,14 @@ export function parseAddOptions(args: string[]): {
       options.json = true;
     } else if (arg === '--copy') {
       options.copy = true;
+    } else if (arg === '--dir' || arg?.startsWith('--dir=')) {
+      const value = arg === '--dir' ? args[++i] : arg.slice('--dir='.length);
+      if (!value || value.startsWith('-')) {
+        errors.push('--dir requires a directory path');
+        if (value?.startsWith('-')) i--;
+      } else {
+        options.dir = value;
+      }
     } else if (arg === '--subagent') {
       options.subagent = options.subagent || [];
       i++;

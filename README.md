@@ -89,6 +89,7 @@ For GitHub tree lookups, `skills` first tries the API anonymously, then an expli
 | `-s, --skill <skills...>` | Install specific skills by name (use `'*'` for all skills)                                                                                         |
 | `-l, --list`              | List available skills without installing                                                                                                           |
 | `--copy`                  | Copy files instead of symlinking to agent directories                                                                                              |
+| `--dir <path>`            | Copy skills directly into a custom skills directory (e.g. `~/.claude/skills`), skipping agent and scope selection                                  |
 | `-y, --yes`               | Skip all confirmation prompts                                                                                                                      |
 | `--all`                   | Install all skills to all agents without prompts                                                                                                   |
 
@@ -121,6 +122,9 @@ npx skills add vercel-labs/agent-skills --agent '*' --skill frontend-design
 
 # Install from a direct SKILL.md or archive download URL
 npx skills add https://example.com/download/my-skill
+
+# Install into a custom skills directory (e.g. a second Claude Code config dir)
+npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/personal/.claude-config/skills
 ```
 
 Direct download URLs are tried after well-known discovery. They may point to a single valid `SKILL.md` file or a `.zip`, `.tar`, `.tar.gz`, or `.tgz` archive; the URL does not need to include a file extension. Downloads are limited to 10 MiB, extracted content to 25 MiB, and archives to 1000 files by default. Override with `SKILLS_DOWNLOAD_MAX_BYTES`, `SKILLS_EXTRACT_MAX_BYTES`, and `SKILLS_EXTRACT_MAX_FILES` when you trust the source.
