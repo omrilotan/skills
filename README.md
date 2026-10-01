@@ -139,18 +139,36 @@ Direct download URLs are tried after well-known discovery. They may point to a s
 
 ### Custom Directories
 
-Use `--dir` to install into a folder that is not one of the built-in agent locations. Typical cases are a second agent profile (for example two Claude Code configs), a dotfiles-managed folder, or a self-hosted agent.
+Use `--dir` to install into a folder that is not one of the built-in agent locations. Skills are copied to `<path>/<skill-name>/`, and agent selection, the scope prompt and symlinks are skipped. How you write the path decides who the setting is for.
+
+**Project directory (relative path).** Shared with everyone on the project through `skills-lock.json`:
+
+```bash
+npx skills add vercel-labs/agent-skills --skill frontend-design --dir ./.agents/skills
+```
+
+The first install records the directory in `skills-lock.json`, relative to the project root:
+
+```json
+{
+  "version": 1,
+  "skillsDir": "./.agents/skills",
+  "skills": { "frontend-design": { "source": "vercel-labs/agent-skills", "...": "..." } }
+}
+```
+
+From then on, project commands use it without any flag, for every developer, whatever agents they have installed: `skills add <source>`, `skills update -p`, `skills experimental_install`, `skills list` and `skills remove`. You can also add `skillsDir` to `skills-lock.json` by hand. Passing `-g`, `--agent` or `--subagent` bypasses it. The directory must be inside the project.
+
+**Personal directory (absolute or `~` path).** For machine-specific folders, such as a second agent profile or a dotfiles-managed folder:
 
 ```bash
 npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/work/.claude/skills
 npx skills add vercel-labs/agent-skills --skill frontend-design --dir ~/personal/.claude/skills
 ```
 
-- Skills are copied to `<path>/<skill-name>/`. Agent selection, the scope prompt and symlinks are skipped.
-- `~` is expanded and relative paths resolve against the current directory.
-- The directory is recorded in the global lock file (`~/.agents/.skill-lock.json`), separately per directory, so the same skill can live in several directories without clashing with your agent installs.
-- `skills update` refreshes custom directories together with global skills, and `update`, `list` and `remove` accept `--dir <path>` to work on one directory.
-- `--dir` cannot be combined with `--agent`, `--subagent` or `--global`.
+These are tracked per directory in the global lock (`~/.agents/.skill-lock.json`), never in the project. `skills update` refreshes them together with global skills, and `update`, `list` and `remove` accept `--dir <path>` to work on one of them.
+
+`--dir` cannot be combined with `--agent`, `--subagent` or `--global`.
 
 ### Installation Methods
 

@@ -210,20 +210,87 @@ Instructions here.
       expect(existsSync(join(projectDir, 'skills-lock.json'))).toBe(false);
     });
 
-    it('supports --dir=<path> and relative paths', () => {
+    it('pins a relative --dir as the project skillsDir and uses it for later commands', () => {
       const sourceDir = join(testDir, 'source');
-      writeSkill(sourceDir, 'rel-skill');
+      writeSkill(sourceDir, 'first-skill');
+      const secondSource = join(testDir, 'source2');
+      writeSkill(secondSource, 'second-skill');
       const projectDir = join(testDir, 'project');
       mkdirSync(projectDir, { recursive: true });
+      const env = { ...noDetectedAgentEnv, XDG_STATE_HOME: join(testDir, 'state') };
+      const lockPath = join(projectDir, 'skills-lock.json');
+      const readLock = () =>
+        JSON.parse(readFileSync(lockPath, 'utf-8')) as {
+          skillsDir?: string;
+          skills: Record<string, unknown>;
+        };
 
-      const result = runCli(
-        ['add', sourceDir, '-y', '--dir=my-skills'],
-        projectDir,
-        noDetectedAgentEnv
+      // First install pins the directory, relative to the project root.
+      expect(runCli(['add', sourceDir, '-y', '--dir=team-skills'], projectDir, env).exitCode).toBe(
+        0
+      );
+      expect(readLock().skillsDir).toBe('./team-skills');
+      expect(Object.keys(readLock().skills)).toEqual(['first-skill']);
+
+      // Later installs need no flag: they follow skillsDir, not detected agents.
+      const second = runCli(['add', secondSource, '-y'], projectDir, env);
+      expect(second.exitCode).toBe(0);
+      expect(second.stdout).toContain('skillsDir in skills-lock.json');
+      expect(existsSync(join(projectDir, 'team-skills', 'second-skill', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(projectDir, '.agents'))).toBe(false);
+      expect(Object.keys(readLock().skills).sort()).toEqual(['first-skill', 'second-skill']);
+
+      // Nothing machine-specific goes to the global lock.
+      expect(existsSync(join(testDir, 'state', 'skills', '.skill-lock.json'))).toBe(false);
+
+      const list = runCli(['ls'], projectDir, env);
+      expect(list.stdout).toContain('Skills in ./team-skills');
+      expect(list.stdout).toContain('second-skill');
+
+      const removed = runCli(['rm', 'first-skill', '-y'], projectDir, env);
+      expect(removed.exitCode).toBe(0);
+      expect(existsSync(join(projectDir, 'team-skills', 'first-skill'))).toBe(false);
+      expect(Object.keys(readLock().skills)).toEqual(['second-skill']);
+      expect(readLock().skillsDir).toBe('./team-skills');
+
+      // A different relative directory is refused instead of silently splitting installs.
+      const conflict = runCli(['add', sourceDir, '-y', '--dir', 'other'], projectDir, env);
+      expect(conflict.exitCode).toBe(1);
+      expect(existsSync(join(projectDir, 'other'))).toBe(false);
+    });
+
+    it('restores a pinned project directory with experimental_install', () => {
+      const sourceDir = join(testDir, 'source');
+      writeSkill(sourceDir, 'restored-skill');
+      const projectDir = join(testDir, 'project');
+      mkdirSync(projectDir, { recursive: true });
+      const env = { ...noDetectedAgentEnv, XDG_STATE_HOME: join(testDir, 'state') };
+
+      expect(
+        runCli(['add', sourceDir, '-y', '--dir', './team-skills'], projectDir, env).exitCode
+      ).toBe(0);
+      rmSync(join(projectDir, 'team-skills'), { recursive: true, force: true });
+
+      const restored = runCli(['experimental_install'], projectDir, env);
+      expect(restored.exitCode).toBe(0);
+      expect(existsSync(join(projectDir, 'team-skills', 'restored-skill', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(projectDir, '.agents'))).toBe(false);
+    });
+
+    it('refuses a checked-in skillsDir outside the project', () => {
+      const sourceDir = join(testDir, 'source');
+      writeSkill(sourceDir, 'evil-skill');
+      const projectDir = join(testDir, 'project');
+      mkdirSync(projectDir, { recursive: true });
+      writeFileSync(
+        join(projectDir, 'skills-lock.json'),
+        JSON.stringify({ version: 1, skillsDir: '../escape', skills: {} })
       );
 
-      expect(result.exitCode).toBe(0);
-      expect(existsSync(join(projectDir, 'my-skills', 'rel-skill', 'SKILL.md'))).toBe(true);
+      const result = runCli(['add', sourceDir, '-y'], projectDir, noDetectedAgentEnv);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout + result.stderr).toContain('outside the project');
+      expect(existsSync(join(testDir, 'escape'))).toBe(false);
     });
 
     it('lists and removes skills in a custom directory using the lock file', () => {

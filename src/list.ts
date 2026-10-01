@@ -12,7 +12,12 @@ import {
 import { hasSkillMd } from './skills.ts';
 import { sanitizeMetadata } from './sanitize.ts';
 import { getAllLockedSkills, getAllDirLocks, getDirLockedSkills } from './skill-lock.ts';
-import { readLocalLock } from './local-lock.ts';
+import {
+  readLocalLock,
+  getProjectSkillsDir,
+  isProjectRelativeDir,
+  resolveProjectSkillsDir,
+} from './local-lock.ts';
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
@@ -90,9 +95,34 @@ export function parseListOptions(args: string[]): ListOptions {
 export async function runList(args: string[]): Promise<void> {
   const options = parseListOptions(args);
 
+  const projectCwd = process.cwd();
   if (options.dir) {
-    await listDir(resolveInstallDir(options.dir), options.json === true);
+    if (isProjectRelativeDir(options.dir)) {
+      const projectDir = resolveProjectSkillsDir(options.dir, projectCwd);
+      if (!projectDir) {
+        console.log(`${YELLOW}--dir ${options.dir} is outside the project${RESET}`);
+        process.exit(1);
+      }
+      await listDir(projectDir, options.json === true, 'project');
+    } else {
+      await listDir(resolveInstallDir(options.dir), options.json === true, 'user');
+    }
     return;
+  }
+
+  // A project that pins skillsDir in skills-lock.json lists that directory.
+  if (!options.global && !(options.agent && options.agent.length > 0)) {
+    let projectSkillsDir: string | undefined;
+    try {
+      projectSkillsDir = await getProjectSkillsDir(projectCwd);
+    } catch (error) {
+      console.log(`${YELLOW}${error instanceof Error ? error.message : String(error)}${RESET}`);
+      process.exit(1);
+    }
+    if (projectSkillsDir) {
+      await listDir(projectSkillsDir, options.json === true, 'project');
+      return;
+    }
   }
 
   // Default to project only (local), use -g for global
@@ -300,9 +330,10 @@ async function printCustomDirsHint(cwd: string): Promise<void> {
 /**
  * List skills in a custom install directory, with sources from the lock file.
  */
-async function listDir(dir: string, json: boolean): Promise<void> {
+async function listDir(dir: string, json: boolean, scope: 'project' | 'user'): Promise<void> {
   const cwd = process.cwd();
-  const lockSkills = await getDirLockedSkills(dir);
+  const lockSkills =
+    scope === 'project' ? (await readLocalLock(cwd)).skills : await getDirLockedSkills(dir);
   const lockBySanitized = new Map(
     Object.entries(lockSkills).map(([name, entry]) => [sanitizeName(name), entry])
   );
@@ -330,7 +361,7 @@ async function listDir(dir: string, json: boolean): Promise<void> {
         withLock.map(({ name, path, lock }) => ({
           name,
           path,
-          scope: 'dir',
+          scope: scope === 'project' ? 'project' : 'dir',
           agents: [],
           source: lock?.source ?? null,
           sourceUrl: lock?.sourceUrl ?? null,

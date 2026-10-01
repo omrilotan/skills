@@ -1154,6 +1154,8 @@ describe('Update Cleanup Unit Tests', () => {
         skills: ['my-skill'],
       });
       expect(parseUpdateOptions(['--dir=/tmp/skills']).dir).toBe('/tmp/skills');
+      vi.mocked(localLock.isProjectRelativeDir).mockReturnValueOnce(true);
+      expect(parseUpdateOptions(['--dir', './team-skills'])).toEqual({ project: true });
     });
 
     it('re-installs changed skills into the same custom directory', async () => {

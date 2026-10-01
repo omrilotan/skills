@@ -12,7 +12,13 @@ import {
   getDirLockedSkills,
   removeSkillFromDirLock,
 } from './skill-lock.ts';
-import { readLocalLock, removeSkillFromLocalLock } from './local-lock.ts';
+import {
+  readLocalLock,
+  removeSkillFromLocalLock,
+  getProjectSkillsDir,
+  isProjectRelativeDir,
+  resolveProjectSkillsDir,
+} from './local-lock.ts';
 import { hasSkillMd } from './skills.ts';
 import type { AgentType } from './types.ts';
 import {
@@ -99,12 +105,36 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
     process.exit(1);
   }
 
+  const explicitTarget = options.global || (options.agent && options.agent.length > 0);
+  let projectSkillsDir: string | undefined;
+  try {
+    projectSkillsDir = await getProjectSkillsDir(process.cwd());
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
   if (options.dir) {
-    if (options.global || (options.agent && options.agent.length > 0)) {
+    if (explicitTarget) {
       p.log.error('The --dir flag cannot be combined with --agent or --global.');
       process.exit(1);
     }
-    await removeFromDir(skillNames, { ...options, dir: resolveInstallDir(options.dir) });
+    if (isProjectRelativeDir(options.dir)) {
+      const projectDir = resolveProjectSkillsDir(options.dir, process.cwd());
+      if (!projectDir) {
+        p.log.error(`--dir ${options.dir} is outside the project.`);
+        process.exit(1);
+      }
+      await removeFromDir(skillNames, { ...options, dir: projectDir }, 'project');
+    } else {
+      await removeFromDir(skillNames, { ...options, dir: resolveInstallDir(options.dir) }, 'user');
+    }
+    return;
+  }
+
+  // A project that pins skillsDir in skills-lock.json removes from there.
+  if (projectSkillsDir && !explicitTarget) {
+    await removeFromDir(skillNames, { ...options, dir: projectSkillsDir }, 'project');
     return;
   }
 
@@ -417,7 +447,8 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
  */
 async function removeFromDir(
   skillNames: string[],
-  options: RemoveOptions & { dir: string }
+  options: RemoveOptions & { dir: string },
+  scope: 'project' | 'user'
 ): Promise<void> {
   const { dir } = options;
   const installedSkills: string[] = [];
@@ -433,7 +464,10 @@ async function removeFromDir(
   }
   installedSkills.sort();
 
-  const lockSkills = await getDirLockedSkills(dir);
+  // Project directories are tracked in skills-lock.json, user directories in the global lock.
+  const cwd = process.cwd();
+  const lockSkills: Record<string, { source?: string; sourceType?: string }> =
+    scope === 'project' ? (await readLocalLock(cwd)).skills : await getDirLockedSkills(dir);
   const lockKeys = Object.keys(lockSkills);
   const requested = options.all ? [...installedSkills, ...lockKeys] : skillNames;
   let selectedSkills = resolveSkillsToRemove(requested, installedSkills, lockKeys);
@@ -484,7 +518,8 @@ async function removeFromDir(
     try {
       await rm(join(dir, sanitizeName(skillName)), { recursive: true, force: true });
       const lockEntry = lockSkills[skillName];
-      await removeSkillFromDirLock(dir, skillName);
+      if (scope === 'project') await removeSkillFromLocalLock(skillName, cwd);
+      else await removeSkillFromDirLock(dir, skillName);
       const source = lockEntry?.source || 'local';
       const group = bySource.get(source) || { skills: [], sourceType: lockEntry?.sourceType };
       group.skills.push(skillName);

@@ -11,7 +11,12 @@ import {
   getAllDirLocks,
   type SkillLockEntry,
 } from './skill-lock.ts';
-import { computeSkillFolderHash, readLocalLock, type LocalSkillLockEntry } from './local-lock.ts';
+import {
+  computeSkillFolderHash,
+  readLocalLock,
+  isProjectRelativeDir,
+  type LocalSkillLockEntry,
+} from './local-lock.ts';
 import {
   formatSourceInput,
   buildUpdateInstallSource,
@@ -105,7 +110,10 @@ export function parseUpdateOptions(args: string[]): UpdateCheckOptions {
     } else if (arg === '--dir' || arg.startsWith('--dir=')) {
       const value = arg === '--dir' ? args[++i] : arg.slice('--dir='.length);
       if (value && !value.startsWith('-')) {
-        options.dir = resolveInstallDir(value);
+        // A relative --dir refers to the project's skillsDir (skills-lock.json),
+        // which project updates already honor.
+        if (isProjectRelativeDir(value)) options.project = true;
+        else options.dir = resolveInstallDir(value);
       } else if (value) {
         i--;
       }
@@ -913,7 +921,11 @@ export async function updateProjectSkills(
   if (hasUniversal) targetParts.push('Universal');
   targetParts.push(...targetAgentNames);
 
-  if (targetParts.length > 0) {
+  // A pinned project directory overrides agent detection: `add` installs there.
+  const skillsDir = (await readLocalLock(cwd))?.skillsDir;
+  if (skillsDir) {
+    console.log(`${TEXT}Updating in: ${skillsDir}${RESET}`);
+  } else if (targetParts.length > 0) {
     console.log(`${TEXT}Updating for: ${targetParts.join(', ')}${RESET}`);
   }
 
